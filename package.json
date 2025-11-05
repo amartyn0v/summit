@@ -10,13 +10,14 @@
     "dev:scheduler": "tsx apps/scheduler/src/index.ts",
     "dev:summarizer": "tsx apps/summarizer/src/index.ts",
     "dev:publisher": "tsx apps/publisher/src/index.ts",
-    "lint": "eslint --ext .ts ./apps ./packages",
+    "lint": "eslint --ext .ts ./apps ./packages ./scripts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "start:api": "tsx apps/api-gateway/src/main.ts",
     "start:scheduler": "tsx apps/scheduler/src/index.ts",
     "start:summarizer": "tsx apps/summarizer/src/index.ts",
-    "start:publisher": "tsx apps/publisher/src/index.ts"
+    "start:publisher": "tsx apps/publisher/src/index.ts",
+    "telegram:test": "tsx scripts/send-test-telegram.ts"
   },
   "engines": {
     "node": ">=20"

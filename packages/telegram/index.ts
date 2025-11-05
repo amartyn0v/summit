@@ -79,6 +79,19 @@ export async function sendPublicationToChannel(message: string): Promise<string 
   return `${result.chat.id}:${result.message_id}`;
 }
 
+export async function sendPlainTextToChannel(message: string): Promise<string | null> {
+  if (config.DRY_RUN_TELEGRAM) {
+    logger.info({ message }, 'DRY RUN: Telegram channel plain-text message');
+    return null;
+  }
+
+  const result = await bot.telegram.sendMessage(config.CHANNEL_CHAT_ID, message, {
+    parse_mode: 'HTML'
+  });
+
+  return `${result.chat.id}:${result.message_id}`;
+}
+
 export function getBotInstance(): Telegraf {
   return bot;
 }

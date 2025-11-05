@@ -4,9 +4,6 @@ node_modules/
 # Build output
 dist/
 
-# Environment files
-.env
-
 # Prisma artifacts
 prisma/dev.db
 prisma/migrations/

@@ -17,6 +17,6 @@
     "types": ["node"]
   },
   "noEmit": true,
-  "include": ["apps/**/*.ts", "packages/**/*.ts", "prisma/**/*.ts"],
+  "include": ["apps/**/*.ts", "packages/**/*.ts", "prisma/**/*.ts", "scripts/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }
