@@ -1,96 +1,136 @@
-# Summit Backend MVP
+# Summit Scientific Summarizer MVP
 
-Минимальный бэкенд-сервис для сбора и публикации саммаризованных научных статей. Реализован на Node.js и включает базу данных SQLite, локальное хранилище файлов и отправку саммари в Telegram.
+Минимальный MVP-сервис для сбора научных статей, генерации саммари и публикации в Telegram-канал. Архитектура повторяет требования технического описания: несколько микросервисов в монорепозитории, PostgreSQL для данных, RabbitMQ для очередей и интеграция с OpenAI и Telegram.
 
-## Возможности
+## Архитектура сервисов
 
-- REST API для создания и получения саммаризованных статей
-- Хранение метаданных в локальной базе данных SQLite
-- Локальное файловое хранилище для вложений (PDF, изображения и т.д.)
-- Отправка саммари в Telegram (с поддержкой dry-run режима для проверки без реальной отправки)
+| Сервис | Назначение |
+| --- | --- |
+| `api-gateway` | REST API для админки: управление источниками, постановка статей в очередь, апрув публикаций. Basic Auth. |
+| `scheduler` | Cron-планировщик: ежедневный обход источников (03:00–05:00 MSK) и публикация утверждённых постов в 11:00 MSK. |
+| `summarizer` | Консьюмер очереди `summarize.request`, вызывает OpenAI API и создаёт черновики публикаций. |
+| `publisher` | Обрабатывает очереди `publication.draft.request` и `publication.schedule`, отправляет превью в DM владельцу и публикует посты в канал. |
 
-## Быстрый старт
+Общая схема обмена повторяет pipeline из техдока: `crawl.start → fetch.request → parse.request → dedup.request → summarize.request → publication.draft.request → publication.approved → publication.schedule` (часть этапов пока заглушена).
 
-1. Скопируйте файл `.env.example` в `.env` и при необходимости обновите значения переменных окружения:
+## Технологический стек
+
+- Node.js 20+ и TypeScript
+- Fastify, Zod, Pino
+- Prisma ORM + PostgreSQL
+- RabbitMQ (amqplib)
+- OpenAI API (Responses API)
+- Telegraf для Telegram Bot API
+- node-cron для планировщика
+
+## Начало работы
+
+1. Скопируйте пример окружения и укажите реальные значения:
 
    ```bash
    cp .env.example .env
    ```
 
-   Основные переменные:
+2. Поднимите инфраструктуру (PostgreSQL, RabbitMQ, Redis) через Docker Compose (см. раздел ниже) или используйте собственные инстансы.
 
-   - `PORT` – порт HTTP-сервера
-   - `DATABASE_PATH` – путь к файлу базы данных SQLite
-   - `UPLOAD_DIR` – директория для сохранения загруженных файлов
-   - `TELEGRAM_BOT_TOKEN` и `TELEGRAM_CHAT_ID` – реквизиты Telegram-бота для реальной отправки
-   - `TELEGRAM_DRY_RUN` – если `true`, сервис имитирует отправку и возвращает payload без реального запроса к Telegram API
-
-2. Установите зависимости и запустите сервер:
+3. Установите зависимости и сгенерируйте Prisma Client:
 
    ```bash
    npm install
-   npm run start
+   npm run prisma:generate
    ```
 
-   Сервер по умолчанию слушает `http://localhost:3000`.
+4. Примените миграции (создайте директорию `prisma/migrations` при первом запуске):
 
-## Основные эндпоинты
-
-| Метод | Путь | Описание |
-| --- | --- | --- |
-| `GET` | `/health` | Проверка состояния сервера |
-| `GET` | `/summaries` | Получить список саммаризованных статей |
-| `GET` | `/summaries/:id` | Получить конкретную запись |
-| `POST` | `/summaries` | Создать саммари. Поддерживает `multipart/form-data` с полями `title`, `summary`, `sourceUrl` и файлом `file` |
-| `POST` | `/summaries/:id/send-telegram` | Отправить саммари в Telegram (использует настройки из `.env`) |
-
-### Пример запроса на создание саммари
-
-```bash
-curl -X POST http://localhost:3000/summaries \
-  -F "title=Новая статья" \
-  -F "summary=Краткое содержание" \
-  -F "sourceUrl=https://example.com/article" \
-  -F "file=@/path/to/local/file.pdf"
-```
-
-### Пример отправки в Telegram
-
-```bash
-curl -X POST http://localhost:3000/summaries/1/send-telegram
-```
-
-- При `TELEGRAM_DRY_RUN=true` ответ содержит payload подготовленного сообщения.
-- Для реальной отправки укажите корректные `TELEGRAM_BOT_TOKEN` и `TELEGRAM_CHAT_ID` в `.env` и установите `TELEGRAM_DRY_RUN=false`.
-
-## Структура проекта
-
-```
-config/          – загрузка переменных окружения
-src/
-  app.js         – конфигурация Express-приложения
-  server.js      – точка входа HTTP-сервера
-  database.js    – инициализация SQLite и методы работы с таблицей summaries
-  controllers/   – контроллеры HTTP-запросов
-  routes/        – маршруты Express
-  services/      – интеграции (Telegram)
-  utils/         – вспомогательные функции (форматирование сообщений)
-storage/         – база данных и загруженные файлы
-```
-
-## Проверка отправки в Telegram
-
-1. Создайте бота через `@BotFather` и получите токен.
-2. Добавьте бота в нужный чат и получите `chat_id` (например, через `curl` запрос к `getUpdates`).
-3. Обновите `.env`:
-
-   ```env
-   TELEGRAM_BOT_TOKEN=123456789:ABC...
-   TELEGRAM_CHAT_ID=-1001234567890
-   TELEGRAM_DRY_RUN=false
+   ```bash
+   npm run prisma:migrate -- --name init
    ```
 
-4. Отправьте POST-запрос `/summaries/:id/send-telegram`. При успешной отправке API вернет ответ Telegram.
+5. Запустите нужные сервисы локально (используются `tsx` + hot reload):
+
+   ```bash
+   npm run dev:api
+   npm run dev:scheduler
+   npm run dev:summarizer
+   npm run dev:publisher
+   ```
+
+   Для интеграционного прогона одновременно понадобятся PostgreSQL, RabbitMQ, OpenAI API key и Telegram bot token. Сервис Telegram поддерживает режим `DRY_RUN_TELEGRAM=true` для безопасного теста без отправки сообщений.
+
+## Docker Compose (пример)
+
+Создайте файл `docker-compose.yml` рядом с репозиторием со следующим содержимым, чтобы поднять инфраструктуру:
+
+```yaml
+version: '3.9'
+services:
+  postgres:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: summit
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    restart: unless-stopped
+    ports:
+      - '5672:5672'
+      - '15672:15672'
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+
+volumes:
+  postgres-data:
+```
+
+(Подключение Redis пока не используется, но добавлено согласно техдоку.)
+
+## API (выдержка)
+
+- `GET /health` — проверка статуса.
+- `GET /sources` / `POST /sources` — управление источниками.
+- `POST /summaries` — постановка статьи в очередь на суммаризацию. Требует `sourceId` (созданный через `/sources`).
+- `GET /summaries` — последние саммари с метаданными.
+- `GET /publications` — последние публикации.
+- `POST /publications/:id/approve` — апрув черновика (после DM). Триггерит очередь `publication.approved`, которую обрабатывает планировщик.
+
+Все запросы защищены Basic Auth (`BASIC_AUTH_USER` / `BASIC_AUTH_PASSWORD`).
+
+## Локальное файловое хранилище
+
+Тексты статей сохраняются в каталоге `storage/articles/<articleId>/`. Модуль `packages/storage` позволяет записывать и читать файлы; в текущем MVP файлы создаются при обработке источников и могут использоваться дальнейшими сервисами (crawler/fetcher/parse), которые пока не реализованы.
+
+## Тестирование и отладка
+
+- `npm run lint` — проверка стиля кода (ESLint + @typescript-eslint).
+- В разработке используйте `DRY_RUN_TELEGRAM=true`, чтобы не слать реальные сообщения.
+- Для имитации pipeline можно вручную:
+  1. Создать источник через `/sources`.
+  2. Отправить статью через `/summaries` (в теле указать текст/аннотацию).
+  3. Дождаться генерации саммари (сервис `summarizer`).
+  4. Получить черновик в DM (если `DRY_RUN_TELEGRAM=false`).
+  5. Апрувнуть публикацию (`POST /publications/:id/approve`).
+  6. Проверить публикацию после срабатывания планировщика (`scheduler`).
+
+## Дальнейшие шаги
+
+- Реализовать отсутствующие сервисы (`crawler`, `fetcher`, `parser`, `deduplicator`).
+- Добавить UI админки и фронтенд.
+- Расширить мониторинг (Prometheus + Grafana), алерты и бэкапы.
+- Поддержать альтернативные провайдеры LLM (Ollama) и OCR.
 
 ## Лицензия
 
