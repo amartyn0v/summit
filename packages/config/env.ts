@@ -1,6 +1,22 @@
 import 'dotenv/config';
 import { z } from 'zod';
 
+const booleanString = z
+  .string()
+  .trim()
+  .transform((value) => {
+    const normalized = value.toLowerCase();
+    if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) {
+      return true;
+    }
+    if (['false', '0', 'no', 'n', 'off'].includes(normalized)) {
+      return false;
+    }
+    throw new Error(`Invalid boolean value: ${value}`);
+  });
+
+const booleanFromEnv = z.union([z.boolean(), booleanString]);
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   DATABASE_URL: z.string().url(),
@@ -18,7 +34,7 @@ const envSchema = z.object({
   SUMMARY_MAX_LENGTH: z.coerce.number().default(1000),
   STORAGE_DIR: z.string().default('storage'),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
-  DRY_RUN_TELEGRAM: z.coerce.boolean().default(true),
+  DRY_RUN_TELEGRAM: booleanFromEnv.default(true),
   SCHEDULER_START_HOUR: z.coerce.number().min(0).max(23).default(3),
   SCHEDULER_END_HOUR: z.coerce.number().min(0).max(23).default(5),
   PUBLICATION_HOUR_MSK: z.coerce.number().min(0).max(23).default(11)
