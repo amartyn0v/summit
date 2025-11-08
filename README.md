@@ -93,6 +93,7 @@ docker compose logs -f      # просмотр логов
 - `npm run lint` — проверка стиля кода (ESLint + @typescript-eslint).
 - В разработке используйте `DRY_RUN_TELEGRAM=true`, чтобы не слать реальные сообщения.
 - `npm run telegram:test -- "текст"` — ручная проверка отправки сообщения в канал SummIt! с выводом ссылки на опубликованное сообщение.
+- `npm run ingest:naturescience` — скачивает PDF с указанных страниц журнала Nature Science, генерирует саммари через OpenAI и отправляет текст в Telegram. Повторные запуски пропускают уже обработанные PDF (список хранится в `storage/naturescience/processed.json`).
 - Для имитации pipeline можно вручную:
   1. Создать источник через `/sources`.
   2. Отправить статью через `/summaries` (в теле указать текст/аннотацию).
