@@ -25,10 +25,9 @@
 
 ## Начало работы
 
-1. Проверьте переменные окружения. В репозитории уже лежит рабочий файл `.env` с токеном бота SummIt! и настройками по умолчанию.
-   При необходимости обновите значения или создайте собственный `.env` на основе шаблона `.env.example`.
+1. Скопируйте `.env.example` в `.env` и заполните секреты. Значения по умолчанию уже настроены на инфраструктуру из `docker-compose.yml`.
 
-2. Поднимите инфраструктуру (PostgreSQL, RabbitMQ, Redis) через Docker Compose (см. раздел ниже) или используйте собственные инстансы.
+2. Поднимите инфраструктуру (PostgreSQL, RabbitMQ, Redis) командой `docker compose up -d` (см. раздел ниже) или используйте собственные инстансы, скорректировав переменные окружения.
 
 3. Установите зависимости и сгенерируйте Prisma Client:
 
@@ -54,46 +53,25 @@
 
    Для интеграционного прогона одновременно понадобятся PostgreSQL, RabbitMQ, OpenAI API key и Telegram bot token. Сервис Telegram поддерживает режим `DRY_RUN_TELEGRAM=true` для безопасного теста без отправки сообщений.
 
-## Docker Compose (пример)
+## Docker Compose (инфраструктура)
 
-Создайте файл `docker-compose.yml` рядом с репозиторием со следующим содержимым, чтобы поднять инфраструктуру:
+`docker-compose.yml` уже содержит все необходимые сервисы:
 
-```yaml
-version: '3.9'
-services:
-  postgres:
-    image: postgres:15
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: summit
-    ports:
-      - '5432:5432'
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-
-  rabbitmq:
-    image: rabbitmq:3-management
-    restart: unless-stopped
-    ports:
-      - '5672:5672'
-      - '15672:15672'
-    environment:
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
-
-  redis:
-    image: redis:7
-    restart: unless-stopped
-    ports:
-      - '6379:6379'
-
-volumes:
-  postgres-data:
+```bash
+docker compose up -d        # старт инфраструктуры
+docker compose down         # остановка и удаление контейнеров
+docker compose logs -f      # просмотр логов
 ```
 
-(Подключение Redis пока не используется, но добавлено согласно техдоку.)
+### Что поднимается
+
+| Сервис | Порт (хост) | Доступ/ссылки | Комментарий |
+| --- | --- | --- | --- |
+| PostgreSQL 15 | `5432` | `postgres` / `postgres`, БД `summit` | Данные сохраняются в volume `postgres-data` |
+| RabbitMQ 3.12 + management | `5672`, `15672` | Панель: http://localhost:15672 (`guest` / `guest`) | Очереди и настройки в volume `rabbitmq-data` |
+| Redis 7 (AOF) | `6379` | `redis-cli -h localhost` | Volume `redis-data`, включён append-only режим |
+
+Все сервисы имеют `healthcheck`, поэтому `docker compose ps` покажет статус готовности. Если вы запускаете Node.js сервисы напрямую на хосте, оставьте строки подключения из `.env.example` (`localhost`). При запуске приложений в Docker поменяйте хосты на имена сервисов (`postgres`, `rabbitmq`, `redis`).
 
 ## API (выдержка)
 
