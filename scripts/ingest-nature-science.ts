@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rm, readdir } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createRequire } from 'node:module';
@@ -33,6 +33,7 @@ const PDF_HEADERS = {
 } as const;
 const STORAGE_SUBDIR = 'naturescience';
 const PROCESSED_FILE = 'processed.json';
+const RESET_FLAGS = new Set(['--reset', '--clear-processed']);
 
 const require = createRequire(import.meta.url);
 
@@ -155,6 +156,35 @@ async function loadProcessedSet(filePath: string): Promise<Set<string>> {
 async function saveProcessedSet(filePath: string, data: Set<string>): Promise<void> {
   const payload = JSON.stringify(Array.from(data), null, 2);
   await writeFile(filePath, payload, 'utf8');
+}
+
+async function clearProcessedArtifacts(storageDir: string, processedFilePath: string): Promise<void> {
+  logger.info('Resetting processed Nature Science PDFs and cached files');
+
+  await rm(processedFilePath, { force: true }).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      logger.warn({ processedFilePath, error: serializeError(error) }, 'Failed to delete processed.json');
+    }
+  });
+
+  try {
+    const entries = await readdir(storageDir, { withFileTypes: true });
+
+    await Promise.all(
+      entries
+        .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.pdf'))
+        .map((entry) =>
+          rm(path.join(storageDir, entry.name), { force: true }).catch((error) => {
+            logger.warn(
+              { filePath: path.join(storageDir, entry.name), error: serializeError(error) },
+              'Failed to delete cached PDF file'
+            );
+          })
+        )
+    );
+  } catch (error) {
+    logger.warn({ storageDir, error: serializeError(error) }, 'Failed to enumerate cached PDF files');
+  }
 }
 
 async function extractPdfText(pdfBuffer: Buffer): Promise<string> {
@@ -299,6 +329,14 @@ async function main(): Promise<void> {
   const pdfDir = await ensureStorageDir(storageRoot);
   const processedFilePath = path.join(pdfDir, PROCESSED_FILE);
   const processed = await loadProcessedSet(processedFilePath);
+
+  const args = new Set(process.argv.slice(2));
+  const shouldReset = Array.from(args).some((arg) => RESET_FLAGS.has(arg));
+
+  if (shouldReset) {
+    await clearProcessedArtifacts(pdfDir, processedFilePath);
+    processed.clear();
+  }
 
   const allLinks = new Set<string>();
   for (const page of TARGET_PAGES) {
