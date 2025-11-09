@@ -284,6 +284,37 @@ async function summarizePdfWithOpenAI(
   }
 }
 
+function buildFallbackSummary(
+  title: string,
+  introSection: string | null,
+  rawText: string
+): string {
+  const sanitized = (introSection ?? rawText).replace(/\u0000/g, ' ');
+  const sentences = sanitized
+    .split(/(?<=[\.\!\?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.length > 0)
+    .slice(0, 3);
+
+  const lines = [
+    '⚠️ Не удалось получить сводку через OpenAI (ограничение региона).',
+    `Статья: «${title}».`
+  ];
+
+  if (sentences.length > 0) {
+    lines.push('Ключевые моменты (оригинал):');
+    for (const sentence of sentences) {
+      lines.push(`• ${sentence}`);
+    }
+  } else {
+    lines.push('Не удалось автоматически выделить ключевые фразы из текста PDF.');
+  }
+
+  lines.push('Пожалуйста, ознакомьтесь с документом вручную.');
+
+  return lines.join('\n');
+}
+
 async function processPdf(
   pdfUrl: string,
   storageDir: string,
@@ -323,8 +354,10 @@ async function processPdf(
 
   const summary = await summarizePdfWithOpenAI(filePath, titleFromContent);
   if (summary) {
-    const summaryMessage = `Summary (OpenAI, Russian):\n${summary}`;
-    await sendPlainTextToChannel(escapeHtml(summaryMessage));
+    await sendPlainTextToChannel(escapeHtml(summary));
+  } else {
+    const fallback = buildFallbackSummary(titleFromContent, introSection, rawText);
+    await sendPlainTextToChannel(escapeHtml(fallback));
   }
 
   processed.add(pdfUrl);
