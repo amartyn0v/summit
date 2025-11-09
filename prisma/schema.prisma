@@ -1,0 +1,114 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SourceType {
+  rss
+  api
+  html
+}
+
+enum SummaryLengthType {
+  short
+}
+
+enum SummaryTone {
+  plain
+}
+
+enum PublicationStatus {
+  draft
+  approved
+  scheduled
+  sent
+  failed
+  cancelled
+}
+
+model Source {
+  id          String    @id @default(cuid())
+  name        String
+  type        SourceType
+  baseUrl     String
+  schedule    String?
+  rateLimit   Int?
+  enabled     Boolean   @default(true)
+  priority    Int       @default(0)
+  defaultTags Json?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  articles    Article[]
+}
+
+model Article {
+  id           String       @id @default(cuid())
+  source       Source       @relation(fields: [sourceId], references: [id])
+  sourceId     String
+  externalId   String?      @unique
+  title        String
+  url          String
+  fulltextUrl  String?
+  journal      String?
+  year         Int?
+  license      String?
+  language     String?
+  authors      Json
+  publishedAt  DateTime?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  articleText  ArticleText?
+  summaries    Summary[]
+
+  @@index([sourceId])
+  @@index([publishedAt])
+}
+
+model ArticleText {
+  articleId   String  @id
+  rawText     String
+  cleanedText String
+  ocrUsed     Boolean @default(false)
+  article     Article @relation(fields: [articleId], references: [id])
+}
+
+model Summary {
+  id           String             @id @default(cuid())
+  article      Article            @relation(fields: [articleId], references: [id])
+  articleId    String
+  text         String
+  lengthType   SummaryLengthType  @default(short)
+  tone         SummaryTone        @default(plain)
+  confidence   Float?
+  tags         Json?
+  warnings     Json?
+  createdBy    String
+  createdAt    DateTime           @default(now())
+  needsReview  Boolean            @default(false)
+  publications Publication[]
+
+  @@index([articleId])
+}
+
+model Publication {
+  id                 String             @id @default(cuid())
+  summary            Summary            @relation(fields: [summaryId], references: [id])
+  summaryId          String
+  channelId          String
+  status             PublicationStatus  @default(draft)
+  dmPreviewMessageId String?
+  approvedBy         String?
+  approvedAt         DateTime?
+  scheduledAt        DateTime?
+  sentAt             DateTime?
+  retryCount         Int                @default(0)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  @@index([summaryId])
+  @@index([status])
+}
