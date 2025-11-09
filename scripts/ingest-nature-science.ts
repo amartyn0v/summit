@@ -1,9 +1,11 @@
 import path from 'node:path';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createRequire } from 'node:module';
 import { request } from 'undici';
 import { load } from 'cheerio';
+import { OpenAI } from 'openai';
 import { getConfig } from '../packages/config/index.ts';
 import { logger } from '../packages/logger/index.ts';
 import { sendPlainTextToChannel } from '../packages/telegram/index.ts';
@@ -33,6 +35,10 @@ const STORAGE_SUBDIR = 'naturescience';
 const PROCESSED_FILE = 'processed.json';
 
 const require = createRequire(import.meta.url);
+
+const config = getConfig();
+
+const openai = new OpenAI({ apiKey: config.OPENAI_API_KEY });
 
 type PdfParseResult = { text: string };
 type PdfParseFn = (dataBuffer: Buffer) => Promise<PdfParseResult>;
@@ -156,18 +162,88 @@ async function extractPdfText(pdfBuffer: Buffer): Promise<string> {
   return text;
 }
 
-function extractTitleFromText(text: string): string | null {
-  const cleaned = text
+function normalizePdfLines(text: string): string[] {
+  return text
     .replace(/\u0000/g, ' ')
     .split(/\r?\n+/)
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
+}
+
+function extractTitleFromText(text: string): string | null {
+  const cleaned = normalizePdfLines(text);
 
   if (cleaned.length === 0) {
     return null;
   }
 
   return cleaned[0];
+}
+
+function extractIntroSection(text: string): string | null {
+  const sanitized = text.replace(/\u0000/g, ' ');
+  const abstractIndex = sanitized.toLowerCase().indexOf('abstract');
+  const slice = abstractIndex >= 0 ? sanitized.slice(0, abstractIndex) : sanitized;
+  const lines = slice
+    .split(/\r?\n+/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  if (lines.length === 0) {
+    return null;
+  }
+
+  return lines.join('\n');
+}
+
+async function summarizePdfWithOpenAI(filePath: string, title: string): Promise<string | null> {
+  try {
+    const upload = await openai.files.create({
+      file: createReadStream(filePath),
+      purpose: 'assistants'
+    });
+
+    try {
+      const completion = await openai.responses.create({
+        model: config.OPENAI_MODEL,
+        input: [
+          {
+            role: 'system',
+            content:
+              'Ты — научный редактор. Прочитай прикреплённый PDF и составь краткое summary простым языком для широкой аудитории. Избегай сложного жаргона.'
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'input_text',
+                text: `Статья: "${title}". Сформулируй основные выводы и важность работы в 3-5 предложениях.`
+              },
+              {
+                type: 'input_file',
+                file_id: upload.id
+              }
+            ]
+          }
+        ],
+        max_output_tokens: 800,
+        temperature: 0.3
+      });
+
+      const summary = completion.output_text.trim();
+      return summary.length > 0 ? summary : null;
+    } finally {
+      await openai.files.del(upload.id).catch((error) => {
+        logger.warn(
+          { fileId: upload.id, error: serializeError(error) },
+          'Failed to delete temporary OpenAI file'
+        );
+      });
+    }
+  } catch (error) {
+    logger.error({ filePath, error: serializeError(error) }, 'Failed to summarize PDF via OpenAI');
+    return null;
+  }
 }
 
 async function processPdf(
@@ -197,10 +273,21 @@ async function processPdf(
     return;
   }
 
-  const titleFromContent = extractTitleFromText(rawText) ?? title;
-  const escapedTitle = escapeHtml(titleFromContent);
+  const introSection = extractIntroSection(rawText);
+  if (introSection) {
+    await sendPlainTextToChannel(escapeHtml(introSection));
+  } else {
+    const titleFromContent = extractTitleFromText(rawText) ?? title;
+    await sendPlainTextToChannel(escapeHtml(titleFromContent));
+  }
 
-  await sendPlainTextToChannel(escapedTitle);
+  const titleFromContent = extractTitleFromText(rawText) ?? title;
+
+  const summary = await summarizePdfWithOpenAI(filePath, titleFromContent);
+  if (summary) {
+    const summaryMessage = `Summary (OpenAI):\n${summary}`;
+    await sendPlainTextToChannel(escapeHtml(summaryMessage));
+  }
 
   processed.add(pdfUrl);
   logger.info({ pdfUrl, title: titleFromContent }, 'PDF processed and title extracted');
@@ -208,8 +295,6 @@ async function processPdf(
 }
 
 async function main(): Promise<void> {
-  const config = getConfig();
-
   const storageRoot = path.resolve(process.cwd(), config.STORAGE_DIR);
   const pdfDir = await ensureStorageDir(storageRoot);
   const processedFilePath = path.join(pdfDir, PROCESSED_FILE);
