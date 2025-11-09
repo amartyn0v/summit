@@ -1,13 +1,11 @@
 import path from 'node:path';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
+import { createRequire } from 'node:module';
 import { request } from 'undici';
 import { load } from 'cheerio';
-import pdfParse from 'pdf-parse';
-import type { AppConfig } from '../packages/config/env.ts';
 import { getConfig } from '../packages/config/index.ts';
 import { logger } from '../packages/logger/index.ts';
-import { generateSummary } from '../packages/summarization/index.ts';
 import { sendPlainTextToChannel } from '../packages/telegram/index.ts';
 
 const TARGET_PAGES = [
@@ -31,10 +29,15 @@ const PDF_HEADERS = {
   ...PAGE_HEADERS,
   accept: 'application/pdf'
 } as const;
-
-const MAX_TEXT_LENGTH = 24_000;
 const STORAGE_SUBDIR = 'naturescience';
 const PROCESSED_FILE = 'processed.json';
+
+const require = createRequire(import.meta.url);
+
+type PdfParseResult = { text: string };
+type PdfParseFn = (dataBuffer: Buffer) => Promise<PdfParseResult>;
+
+const pdfParse: PdfParseFn = require('pdf-parse/lib/pdf-parse.js');
 
 function serializeError(error: unknown): Record<string, unknown> {
   if (error instanceof Error) {
@@ -153,71 +156,24 @@ async function extractPdfText(pdfBuffer: Buffer): Promise<string> {
   return text;
 }
 
-function buildFallbackSummary(text: string, maxLength: number): string {
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  if (!normalized) {
-    return 'Не удалось извлечь текст из PDF. Требуется ручная проверка оригинала.';
+function extractTitleFromText(text: string): string | null {
+  const cleaned = text
+    .replace(/\u0000/g, ' ')
+    .split(/\r?\n+/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  if (cleaned.length === 0) {
+    return null;
   }
 
-  const sentences = normalized.split(/(?<=[.!?])\s+/u).filter(Boolean);
-  const selected: string[] = [];
-  let totalLength = 0;
-
-  for (const sentence of sentences) {
-    const trimmed = sentence.trim();
-    if (!trimmed) {
-      continue;
-    }
-
-    const projectedLength = totalLength + (totalLength > 0 ? 1 : 0) + trimmed.length;
-    if (selected.length >= 3 || projectedLength > maxLength) {
-      break;
-    }
-
-    selected.push(trimmed);
-    totalLength += trimmed.length + (totalLength > 0 ? 1 : 0);
-  }
-
-  const fallback = (selected.length > 0 ? selected.join(' ') : normalized.slice(0, maxLength)).slice(0, maxLength);
-  return fallback || 'Не удалось автоматически построить саммари. Ознакомьтесь с оригиналом.';
-}
-
-interface SummaryOutcome {
-  text: string;
-  needsReview: boolean;
-  usedFallback: boolean;
-}
-
-async function summarizeWithFallback(
-  pdfUrl: string,
-  title: string,
-  truncatedText: string,
-  config: AppConfig
-): Promise<SummaryOutcome> {
-  try {
-    const result = await generateSummary({ title, abstract: truncatedText });
-    return {
-      text: result.text,
-      needsReview: result.needsReview,
-      usedFallback: false
-    };
-  } catch (error) {
-    logger.warn({ pdfUrl, error: serializeError(error) }, 'OpenAI summary failed, using fallback text extraction');
-
-    const fallback = buildFallbackSummary(truncatedText, config.SUMMARY_MAX_LENGTH);
-    return {
-      text: fallback,
-      needsReview: true,
-      usedFallback: true
-    };
-  }
+  return cleaned[0];
 }
 
 async function processPdf(
   pdfUrl: string,
   storageDir: string,
-  processed: Set<string>,
-  config: AppConfig
+  processed: Set<string>
 ): Promise<void> {
   if (processed.has(pdfUrl)) {
     logger.info({ pdfUrl }, 'Skipping already processed PDF');
@@ -234,45 +190,20 @@ async function processPdf(
 
   const pdfBuffer = await downloadPdf(pdfUrl, filePath);
   const rawText = await extractPdfText(pdfBuffer);
-  const text = rawText.replace(/\s+/g, ' ').trim();
+  const hasContent = rawText.replace(/\s+/g, '').length > 0;
 
-  if (!text) {
+  if (!hasContent) {
     logger.warn({ pdfUrl }, 'PDF text extraction returned empty result, skipping');
     return;
   }
 
-  const truncatedText = text.slice(0, MAX_TEXT_LENGTH);
-  const summary = await summarizeWithFallback(pdfUrl, title, truncatedText, config);
+  const titleFromContent = extractTitleFromText(rawText) ?? title;
+  const escapedTitle = escapeHtml(titleFromContent);
 
-  const escapedTitle = escapeHtml(title);
-  const escapedSummary = escapeHtml(summary.text);
-  const notes: string[] = [];
-
-  if (summary.usedFallback) {
-    notes.push('⚠️ Саммари сгенерировано локально без OpenAI — требуется проверка.');
-  }
-
-  if (summary.needsReview && !summary.usedFallback) {
-    notes.push('⚠️ Ответ OpenAI был обрезан до допустимой длины.');
-  }
-
-  const messageLines = [
-    `📘 <b>${escapedTitle}</b>`,
-    '',
-    ...notes.map((note) => escapeHtml(note)),
-    notes.length > 0 ? '' : undefined,
-    escapedSummary,
-    '',
-    `Оригинал: ${pdfUrl}`,
-    '',
-    '#NatureScience #SummIt'
-  ].filter((line): line is string => line !== undefined);
-
-  const message = messageLines.join('\n');
-  await sendPlainTextToChannel(message);
+  await sendPlainTextToChannel(escapedTitle);
 
   processed.add(pdfUrl);
-  logger.info({ pdfUrl }, 'PDF processed and summary sent');
+  logger.info({ pdfUrl, title: titleFromContent }, 'PDF processed and title extracted');
   await delay(1_000); // small delay to avoid hitting rate limits
 }
 
@@ -295,18 +226,19 @@ async function main(): Promise<void> {
     }
   }
 
-  if (allLinks.size === 0) {
+  const [firstPdfUrl] = Array.from(allLinks);
+  if (!firstPdfUrl) {
     logger.warn('No PDF links discovered. Nothing to process.');
     return;
   }
 
-  for (const pdfUrl of allLinks) {
-    try {
-      await processPdf(pdfUrl, pdfDir, processed, config);
-      await saveProcessedSet(processedFilePath, processed);
-    } catch (error) {
-      logger.error({ pdfUrl, error: serializeError(error) }, 'Failed to process PDF');
-    }
+  logger.info({ pdfUrl: firstPdfUrl }, 'Processing only the first discovered PDF link');
+
+  try {
+    await processPdf(firstPdfUrl, pdfDir, processed);
+    await saveProcessedSet(processedFilePath, processed);
+  } catch (error) {
+    logger.error({ pdfUrl: firstPdfUrl, error: serializeError(error) }, 'Failed to process PDF');
   }
 
   logger.info('Processing completed');
