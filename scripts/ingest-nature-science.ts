@@ -3,7 +3,9 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { request } from 'undici';
 import { load } from 'cheerio';
-import pdfParse from 'pdf-parse';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const pdfParse = require('pdf-parse');
 import { getConfig } from '../packages/config/index.ts';
 import { logger } from '../packages/logger/index.ts';
 import { generateSummary } from '../packages/summarization/index.ts';
@@ -13,23 +15,6 @@ const TARGET_PAGES = [
   'https://naturesciencemagazine.in/nature-science-e-magazine-9/',
   'https://naturesciencemagazine.in/archives/'
 ];
-
-const SITE_ORIGIN = 'https://naturesciencemagazine.in';
-
-const PAGE_HEADERS = {
-  'user-agent':
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-  accept:
-    'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-  'accept-language': 'en-US,en;q=0.9',
-  referer: SITE_ORIGIN,
-  'cache-control': 'no-cache'
-} as const;
-
-const PDF_HEADERS = {
-  ...PAGE_HEADERS,
-  accept: 'application/pdf'
-} as const;
 
 const MAX_TEXT_LENGTH = 24_000;
 const STORAGE_SUBDIR = 'naturescience';
@@ -41,10 +26,7 @@ function escapeHtml(input: string): string {
 
 async function fetchPdfLinks(pageUrl: string): Promise<string[]> {
   logger.info({ pageUrl }, 'Fetching page');
-  const response = await request(pageUrl, {
-    headers: PAGE_HEADERS,
-    maxRedirections: 5
-  });
+  const response = await request(pageUrl);
   if (response.statusCode >= 400) {
     throw new Error(`Failed to fetch ${pageUrl}: ${response.statusCode}`);
   }
@@ -70,19 +52,13 @@ async function fetchPdfLinks(pageUrl: string): Promise<string[]> {
 
 async function downloadPdf(url: string, destination: string): Promise<Buffer> {
   logger.info({ url }, 'Downloading PDF');
-  const response = await request(url, {
-    headers: PDF_HEADERS,
-    maxRedirections: 5
-  });
+  const response = await request(url);
   if (response.statusCode >= 400) {
     throw new Error(`Failed to download ${url}: ${response.statusCode}`);
   }
 
   const arrayBuffer = await response.body.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
-  if (buffer.length === 0 || !buffer.slice(0, 4).toString().startsWith('%PDF')) {
-    throw new Error('Downloaded file is not a valid PDF document');
-  }
   await writeFile(destination, buffer);
   return buffer;
 }
@@ -186,13 +162,7 @@ async function main(): Promise<void> {
       logger.info({ page, count: links.length }, 'Found PDF links');
       links.forEach((link) => allLinks.add(link));
     } catch (error) {
-      logger.error(
-        {
-          page,
-          error: error instanceof Error ? { message: error.message, stack: error.stack } : error
-        },
-        'Failed to fetch page links'
-      );
+      logger.error({ page, error }, 'Failed to fetch page links');
     }
   }
 
@@ -206,13 +176,7 @@ async function main(): Promise<void> {
       await processPdf(pdfUrl, pdfDir, processed);
       await saveProcessedSet(processedFilePath, processed);
     } catch (error) {
-      logger.error(
-        {
-          pdfUrl,
-          error: error instanceof Error ? { message: error.message, stack: error.stack } : error
-        },
-        'Failed to process PDF'
-      );
+      logger.error({ pdfUrl, error }, 'Failed to process PDF');
     }
   }
 

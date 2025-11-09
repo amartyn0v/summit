@@ -12,11 +12,10 @@
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true,
     "allowImportingTsExtensions": true,
+    "noEmit": true,
     "noEmitOnError": true,
-    "sourceMap": true,
-    "types": ["node"]
+    "sourceMap": true
   },
-  "noEmit": true,
   "include": ["apps/**/*.ts", "packages/**/*.ts", "prisma/**/*.ts", "scripts/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }
