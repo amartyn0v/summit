@@ -226,7 +226,12 @@ function extractIntroSection(text: string): string | null {
   return lines.join('\n');
 }
 
-async function summarizePdfWithOpenAI(filePath: string, title: string): Promise<string | null> {
+type SummarizationResult = { summaryEn: string; summaryRu: string };
+
+async function summarizePdfWithOpenAI(
+  filePath: string,
+  title: string
+): Promise<SummarizationResult | null> {
   try {
     const upload = await openai.files.create({
       file: createReadStream(filePath),
@@ -247,7 +252,8 @@ async function summarizePdfWithOpenAI(filePath: string, title: string): Promise<
             content: [
               {
                 type: 'input_text',
-                text: `Статья: "${title}". Сформулируй основные выводы и важность работы в 3-5 предложениях.`
+                text:
+                  `Статья: "${title}". Сформулируй основные выводы и важность работы в 3-5 предложениях. Затем переведи получившееся summary на русский язык. Верни ответ строго в формате JSON с полями summary_en и summary_ru.`
               },
               {
                 type: 'input_file',
@@ -260,8 +266,44 @@ async function summarizePdfWithOpenAI(filePath: string, title: string): Promise<
         temperature: 0.3
       });
 
-      const summary = completion.output_text.trim();
-      return summary.length > 0 ? summary : null;
+      const summaryText = completion.output_text.trim();
+
+      if (!summaryText) {
+        return null;
+      }
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(summaryText);
+      } catch (error) {
+        logger.error(
+          { filePath, error: serializeError(error), response: summaryText },
+          'Failed to parse OpenAI summary JSON'
+        );
+        return null;
+      }
+
+      if (
+        typeof parsed !== 'object' ||
+        parsed === null ||
+        typeof (parsed as { summary_en?: unknown }).summary_en !== 'string' ||
+        typeof (parsed as { summary_ru?: unknown }).summary_ru !== 'string'
+      ) {
+        logger.error(
+          { filePath, response: parsed },
+          'OpenAI summary JSON does not match expected schema'
+        );
+        return null;
+      }
+
+      const summaryEn = ((parsed as { summary_en: string }).summary_en || '').trim();
+      const summaryRu = ((parsed as { summary_ru: string }).summary_ru || '').trim();
+
+      if (!summaryEn || !summaryRu) {
+        return null;
+      }
+
+      return { summaryEn, summaryRu };
     } finally {
       await openai.files.del(upload.id).catch((error) => {
         logger.warn(
@@ -315,8 +357,11 @@ async function processPdf(
 
   const summary = await summarizePdfWithOpenAI(filePath, titleFromContent);
   if (summary) {
-    const summaryMessage = `Summary (OpenAI):\n${summary}`;
+    const summaryMessage = `Summary (OpenAI):\n${summary.summaryEn}`;
     await sendPlainTextToChannel(escapeHtml(summaryMessage));
+
+    const translationMessage = `Summary (OpenAI, Russian):\n${summary.summaryRu}`;
+    await sendPlainTextToChannel(escapeHtml(translationMessage));
   }
 
   processed.add(pdfUrl);
